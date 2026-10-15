@@ -71,13 +71,9 @@ async def websocket_endpoint(websocket: WebSocket):
             train_user_idx = 0      
         
 
-        # Add the connection to the specified room
-        await manager.connect(websocket, room_code,user_id)
         room_data = create_or_join_room(room_code, user_id, expected_members, train_user_idx)
-        
-        
         if not room_data:
-            # Room is full; notify the client and close connection.
+            # Room is full; notify the client and close connection without registering in manager.
             print(f"Room {room_code} is full. Rejecting user {user_id}.")
             await manager.send_personal_message({
                 "type": "room_full",
@@ -85,6 +81,9 @@ async def websocket_endpoint(websocket: WebSocket):
             }, websocket)
             await websocket.close()
             return
+
+        # Add the connection to the specified room after capacity check succeeds
+        await manager.connect(websocket, room_code, user_id)
 
         # Notify all users in the room of new user update 
         await manager.broadcast_to_room(room_code, {

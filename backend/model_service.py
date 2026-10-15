@@ -124,14 +124,18 @@ def recommend_for_group(
     candidate_movies: Optional[Iterable[Dict[str, Any]]] = None,
     predictor: Optional[Callable[[int, int, np.ndarray], float]] = None,
     top_k: int = 3,
+    fairness_lambda: float = 0.0,
 ) -> List[Dict[str, Any]]:
     """
-    Compute residual-bias-corrected group movie recommendations.
+    Compute residual-bias-corrected group movie recommendations with optional
+    Pareto-fair least-misery aggregation:
+      score(i) = (1 - fairness_lambda) * mean_u(s(u, i)) + fairness_lambda * min_u(s(u, i))
     Deduplicates group members so users who submitted more ratings do not
-    disproportionately weight the group average.
+    disproportionately weight the group utility.
     """
     if not group_ratings or top_k <= 0:
         return []
+    lam = max(0.0, min(1.0, float(fairness_lambda)))
 
     model, item_encoder, genre_cols_local = load_model_and_metadata()
     catalog = list(candidate_movies) if candidate_movies is not None else _load_catalog_items(genre_cols_local)
@@ -144,7 +148,22 @@ def recommend_for_group(
         genres = np.asarray(item.get("genres", np.zeros(len(genre_cols_local))), dtype=np.float32)
         movie_rows[mid] = {"movie_id": mid, "title": str(item["title"]), "genres": genres}
 
-    def _predict(train_user_idx: int, movie_id: int, genres: np.ndarray) -> float:
+    # Estimate per-user genre affinity from observed group ratings when neural model is offline
+    user_genre_num: Dict[str, np.ndarray] = {}
+    user_genre_den: Dict[str, np.ndarray] = {}
+    for r_entry in group_ratings:
+        uid = str(r_entry.get("user_id"))
+        rmid = int(r_entry.get("movie_id"))
+        rval = float(r_entry.get("rating"))
+        if rmid in movie_rows:
+            gvec = movie_rows[rmid]["genres"]
+            if uid not in user_genre_num:
+                user_genre_num[uid] = np.zeros_like(gvec, dtype=np.float32)
+                user_genre_den[uid] = np.zeros_like(gvec, dtype=np.float32)
+            user_genre_num[uid] = user_genre_num[uid] + gvec * (rval - 3.0)
+            user_genre_den[uid] = user_genre_den[uid] + np.abs(gvec)
+
+    def _predict(train_user_idx: int, movie_id: int, genres: np.ndarray, user_id: Optional[str] = None) -> float:
         if predictor is not None:
             return float(predictor(train_user_idx, movie_id, genres))
         if model is not None and torch is not None and movie_id in item_encoder:
@@ -154,10 +173,15 @@ def recommend_for_group(
                 u_t = torch.tensor([train_user_idx], dtype=torch.long)
                 i_t = torch.tensor([item_idx], dtype=torch.long)
                 return float(model(u_t, i_t, g_t).item())
-        # Deterministic content-based baseline when PyTorch weights are unavailable
+        # Deterministic content-based baseline incorporating per-user genre affinity
         active = float(np.sum(genres))
         genre_bonus = float(np.dot(genres, np.linspace(0.1, 0.5, num=len(genres)))) / max(active, 1.0)
-        return 3.0 + genre_bonus
+        affinity = 0.0
+        if user_id and user_id in user_genre_num and active > 0:
+            denom = np.where(user_genre_den[user_id] > 0, user_genre_den[user_id], 1.0)
+            user_pref = user_genre_num[user_id] / denom
+            affinity = float(np.dot(genres, user_pref)) / active
+        return 3.0 + genre_bonus + 0.5 * affinity
 
     user_residuals: Dict[str, List[float]] = defaultdict(list)
     unique_members: Dict[str, int] = {}
@@ -171,7 +195,7 @@ def recommend_for_group(
 
         if rated_movie_id in movie_rows:
             row = movie_rows[rated_movie_id]
-            predicted_rating = _predict(train_user_idx, rated_movie_id, row["genres"])
+            predicted_rating = _predict(train_user_idx, rated_movie_id, row["genres"], user_id=user_id)
             user_residuals[user_id].append(actual_rating - predicted_rating)
 
     user_bias: Dict[str, float] = {
@@ -187,13 +211,15 @@ def recommend_for_group(
             continue
         candidate_scores = []
         for user_id, train_user_idx in unique_members.items():
-            base_score = _predict(train_user_idx, mid, row["genres"])
+            base_score = _predict(train_user_idx, mid, row["genres"], user_id=user_id)
             adjusted_score = base_score + user_bias.get(user_id, 0.0)
             candidate_scores.append(adjusted_score)
 
         if candidate_scores:
-            avg_score = sum(candidate_scores) / len(candidate_scores)
-            predictions.append((row["title"], avg_score))
+            mean_score = sum(candidate_scores) / len(candidate_scores)
+            min_score = min(candidate_scores)
+            blended_score = (1.0 - lam) * mean_score + lam * min_score
+            predictions.append((row["title"], blended_score))
 
     predictions.sort(key=lambda x: x[1], reverse=True)
     return [{"title": title, "score": round(score, 2)} for title, score in predictions[:top_k]]

@@ -75,3 +75,31 @@ def test_recommend_for_group_with_real_movielens_catalog():
     recs = recommend_for_group(group_ratings, top_k=3)
     assert len(recs) == 3
     assert all("title" in r and "score" in r for r in recs)
+
+
+def test_pareto_fair_least_misery_aggregation():
+    catalog = [
+        {"movie_id": 1, "title": "Rated 1", "genres": np.array([1.0, 0.0])},
+        {"movie_id": 10, "title": "Polarizing Blockbuster", "genres": np.array([1.0, 0.0])},
+        {"movie_id": 11, "title": "Consensus Crowdpleaser", "genres": np.array([0.0, 1.0])},
+    ]
+
+    # Alice loves Movie 10 (5.0), Bob hates it (1.0) -> mean=3.0, min=1.0
+    # Both like Movie 11 (2.8, 2.8) -> mean=2.8, min=2.8
+    def predictor(train_user_idx: int, movie_id: int, _genres: np.ndarray) -> float:
+        if movie_id == 1:
+            return 3.0
+        if movie_id == 10:
+            return 5.0 if train_user_idx == 1 else 1.0
+        return 2.8
+
+    ratings = [
+        {"user_id": "alice", "train_user_idx": 1, "movie_id": 1, "rating": 3.0},
+        {"user_id": "bob", "train_user_idx": 2, "movie_id": 1, "rating": 3.0},
+    ]
+    mean_only = recommend_for_group(ratings, candidate_movies=catalog, predictor=predictor, fairness_lambda=0.0)
+    assert mean_only[0]["title"] == "Polarizing Blockbuster"
+
+    pareto_fair = recommend_for_group(ratings, candidate_movies=catalog, predictor=predictor, fairness_lambda=0.5)
+    assert pareto_fair[0]["title"] == "Consensus Crowdpleaser"
+
