@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Group Movie Recommender</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:400,500,700">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Group Movie Recommender</h1>
+  
+    <!-- Room Join Section -->
+    <div id="roomJoinSection" class="card">
+      <input id="roomCodeInput" placeholder="Enter Room Code">
+      <input id="userLimitInput" placeholder="User Limit (e.g., 3)" type="number" min="2" max="10">
+      <button onclick="joinRoom()">Join Room</button>
+    </div>
+  
+    <!-- Room Info Section -->
+    <div id="roomInfoSection" class="card" style="display:none;">
+      <h2>Room: <span id="roomCodeDisplay"></span></h2>
+      <h3>Your Username: <span id="userNameDisplay"></span></h3>
+      <h3>Users in Room:</h3>
+      <ul id="userList"></ul>
+    </div>
+  
+    <!-- Genre Selection Section -->
+    <div id="genreSection" class="card" style="display:none;">
+      <h3>Select a Genre</h3>
+      <select id="genreDropdown">
+        <option value="All">All</option>
+        <option value="Action">Action</option>
+        <option value="Adventure">Adventure</option>
+        <option value="Animation">Animation</option>
+        <option value="Children's">Children's</option>
+        <option value="Comedy">Comedy</option>
+        <option value="Crime">Crime</option>
+        <option value="Documentary">Documentary</option>
+        <option value="Drama">Drama</option>
+        <option value="Fantasy">Fantasy</option>
+        <option value="Film-Noir">Film-Noir</option>
+        <option value="Horror">Horror</option>
+        <option value="Musical">Musical</option>
+        <option value="Mystery">Mystery</option>
+        <option value="Romance">Romance</option>
+        <option value="Sci-Fi">Sci-Fi</option>
+        <option value="Thriller">Thriller</option>
+        <option value="War">War</option>
+        <option value="Western">Western</option>
+      </select>
+      <button onclick="requestMovies()">Get Movies</button>
+    </div>
+  
+    <!-- Movie List Section -->
+    <div id="movieListSection" class="card" style="display:none;">
+      <h3>Movies to Rate</h3>
+      <ul id="movieList"></ul>
+    </div>
+  
+    <!-- Group Recommendation Section -->
+    <div id="groupRecSection" class="card" style="display:none;">
+      <h3>Group Recommendation</h3>
+      <div id="groupRec"></div>
+      <button id="showGroupRecBtn" onclick="triggerGroupRec()">Show Group Recommendation</button>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
