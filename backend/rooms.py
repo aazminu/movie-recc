@@ -1,99 +1,97 @@
+from typing import Dict, List, Optional
 
-import random
-from typing import Dict, List
-
-# In-memory storage for rooms 
-# Structure:
-# rooms = {
-#   "ROOM123": {
-#       "expected_members": 3,
-#       "members": {
-#           "user123": {"train_user_idx": 17, "is_done": True, "ratings": [...]}
-#       },
-#       "ratings": {},
-#       "movie_list": [...],
-#       "recommendation": {...}
-#   }
-# }
 rooms: Dict[str, Dict] = {}
 
-def create_or_join_room(room_code: str, user_id: str, expected_members: int, train_user_idx: int):
-    """
-    Creates a new room or you join an existing one
-    """
-    # IF room doesnt exist, create a new one 
+
+def create_or_join_room(
+    room_code: str,
+    user_id: str,
+    expected_members: int,
+    train_user_idx: int,
+) -> Optional[Dict]:
+    """Create a new room or join an existing one."""
+    if expected_members <= 0:
+        raise ValueError("expected_members must be positive")
+
     if room_code not in rooms:
         rooms[room_code] = {
             "expected_members": expected_members,
             "members": {},
             "ratings": {},
             "movie_list": [],
-            "recommendation": None
+            "recommendation": None,
         }
 
-    # Room full check
-    if len(rooms[room_code]["members"]) >= rooms[room_code]["expected_members"]:
+    room = rooms[room_code]
+    if user_id not in room["members"] and len(room["members"]) >= room["expected_members"]:
         return None
 
-    # Store member info including their training user index
-    rooms[room_code]["members"][user_id] = {
+    existing = room["members"].get(user_id)
+    room["members"][user_id] = {
         "train_user_idx": train_user_idx,
-        "is_done": False
+        "is_done": existing["is_done"] if existing else False,
+        "ratings": existing.get("ratings", []) if existing else [],
     }
+    return room
 
-    return rooms[room_code]
 
-    # Stores user ratings for model
-def store_ratings(room_code: str, user_id: str, ratings: List[Dict]):
+def store_ratings(room_code: str, user_id: str, ratings: List[Dict]) -> None:
     if room_code in rooms and user_id in rooms[room_code]["members"]:
-        rooms[room_code]["members"][user_id]["ratings"] = ratings
+        rooms[room_code]["members"][user_id]["ratings"] = list(ratings)
         rooms[room_code]["members"][user_id]["is_done"] = True
 
-    # checks if all users in roomk are done
-def all_users_done(room_code: str):
-    return all(member["is_done"] for member in rooms[room_code]["members"].values())
-    
-    # stores movie list that users will rate
-def set_movie_list(room_code: str, movie_list: List[Dict]):
-    rooms[room_code]["movie_list"] = movie_list
 
-    # returns movie list for a room
-def get_movie_list(room_code: str):
-    return rooms[room_code]["movie_list"]
+def all_users_done(room_code: str) -> bool:
+    room = rooms.get(room_code)
+    if not room:
+        return False
+    members = room["members"]
+    if len(members) < room["expected_members"] or not members:
+        return False
+    return all(member.get("is_done", False) for member in members.values())
 
-    #stores final group reccomendation 
-def store_recommendation(room_code: str, rec: Dict):
-    rooms[room_code]["recommendation"] = rec
 
-    #returns final room recommendation
+def set_movie_list(room_code: str, movie_list: List[Dict]) -> None:
+    if room_code in rooms:
+        rooms[room_code]["movie_list"] = movie_list
+
+
+def get_movie_list(room_code: str) -> List[Dict]:
+    room = rooms.get(room_code)
+    return room["movie_list"] if room else []
+
+
+def store_recommendation(room_code: str, rec: List[Dict]) -> None:
+    if room_code in rooms:
+        rooms[room_code]["recommendation"] = rec
+
+
 def get_recommendation(room_code: str):
-    return rooms[room_code]["recommendation"]
+    room = rooms.get(room_code)
+    return room["recommendation"] if room else None
 
-    #returns list of user ids in the given room
-def get_room_members(room_code: str):
+
+def get_room_members(room_code: str) -> List[str]:
     if room_code in rooms:
         return list(rooms[room_code]["members"].keys())
     return []
 
 
-def get_all_ratings(room_code: str):
-    """
-    Return a list of all user ratings in the room.
-    Each rating dict will include the user's assigned index
-    """
+def get_all_ratings(room_code: str) -> List[Dict]:
+    """Return a list of all user ratings in the room with user_id and train_user_idx."""
     room = rooms.get(room_code)
     if not room:
         return []
     data = []
     for user_id, info in room["members"].items():
         for rating in info.get("ratings", []):
-            # Include the user's training index in each rating
-            rating["user_id"] = user_id
-            rating["train_user_idx"] = info.get("train_user_idx", 0)
-            data.append(rating)
+            entry = dict(rating)
+            entry["user_id"] = user_id
+            entry["train_user_idx"] = info.get("train_user_idx", 0)
+            data.append(entry)
     return data
 
-# removes a member, not reallt used tbh 
-def remove_member(room_code: str, user_id: str):
+
+def remove_member(room_code: str, user_id: str) -> None:
     if room_code in rooms and user_id in rooms[room_code]["members"]:
         del rooms[room_code]["members"][user_id]
