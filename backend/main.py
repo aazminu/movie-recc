@@ -1,5 +1,9 @@
 # backend/main.py
-import joblib
+import os
+try:
+    import joblib
+except ImportError:
+    joblib = None
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
@@ -23,13 +27,17 @@ from .rooms import (
 app = FastAPI()
 
 # User encoder to map usernames to models indexes
-user_encoder = joblib.load("user_encoder.pkl")
+try:
+    user_encoder = joblib.load("user_encoder.pkl")
+except Exception:
+    user_encoder = None
 
 # Connection manager which tracks websocket sessions
 manager = ConnectionManager()
 
 # Mount the frontend directory to serve static files (HTML, JS, CSS)
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+if os.path.isdir("frontend"):
+    app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 @app.get("/")
 async def get():
@@ -57,9 +65,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
         # Encode user_id into training index in the model 
         try:
-            train_user_idx = int(user_encoder.transform([user_id])[0])
-        
-        except ValueError:
+            train_user_idx = int(user_encoder.transform([user_id])[0]) if user_encoder is not None else 0
+        except Exception:
             print(f"User {user_id} not found in encoder. Defaulting to 0.")
             train_user_idx = 0      
         
@@ -151,9 +158,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "room_code": room_code,
                     "movies": final_recommendation
                 })
-        else: 
-                print("Un"
-                "known message type received:", msg_type) 
+            else:
+                print("Unknown message type received:", msg_type)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         print("A user disconnected from room.")
