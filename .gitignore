@@ -1,0 +1,29 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# Dataset files (if regenerated)
+train.csv
+test.csv
+
+# Model artifacts
+model.pth
+*.pkl
+
+# User-specific config
+config.py
+
+# Jupyter + VSCode
+.ipynb_checkpoints/
+.vscode/
+.DS_Store
+
+# Logs
+*.log
