@@ -1,190 +1,199 @@
-import torch
-import torch.nn as nn
-import pandas as pd
 from collections import defaultdict
+import os
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+import numpy as np
 
-#Get genre columns from the file
-def get_genre_cols():
-    #Split on thje '|' 
-    genres_df = pd.read_csv("data/ml-100k/u.genre", sep="|", names=["genre", "genre_id"], header=None)
-    return genres_df["genre"].tolist()
+try:
+    import torch
+    import torch.nn as nn
+except ImportError:  # pragma: no cover
+    torch = None
+    nn = None
 
-genre_cols = get_genre_cols()
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover
+    pd = None
 
-# Ensure same architecture is used as in training 
-class MovieRecModel(nn.Module):
-    def __init__(self, num_users, num_items, num_genres, emb_dim=32):
-        super(MovieRecModel, self).__init__()
-        self.user_emb = nn.Embedding(num_users, emb_dim)
-        self.item_emb = nn.Embedding(num_items, emb_dim)
-        self.genre_fc = nn.Linear(num_genres, emb_dim)
-        self.fc1 = nn.Linear(emb_dim * 3, 128)
-        self.bn1 = nn.BatchNorm1d(128)
-        self.dropout1 = nn.Dropout(0.3)
-        self.fc2 = nn.Linear(128, 64)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.dropout2 = nn.Dropout(0.3)
-        self.fc3 = nn.Linear(64, 1)
-    
-    def forward(self, user, item, genre):
-        user_vec = self.user_emb(user)
-        item_vec = self.item_emb(item)
-        genre_vec = self.genre_fc(genre)
-        x = torch.cat([user_vec, item_vec, genre_vec], dim=1)
-        x = torch.relu(self.fc1(x))
-        x = self.bn1(x)
-        x = self.dropout1(x)
-        x = torch.relu(self.fc2(x))
-        x = self.bn2(x)
-        x = self.dropout2(x)
-        x = self.fc3(x)
-        return x.squeeze()
+DEFAULT_GENRES = [
+    "unknown", "Action", "Adventure", "Animation", "Children's", "Comedy",
+    "Crime", "Documentary", "Drama", "Fantasy", "Film-Noir", "Horror",
+    "Musical", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western",
+]
 
-# Function to load the trained model and metadata
-def load_model_and_metadata():
-    train_df = pd.read_csv("train.csv")
+
+def get_genre_cols(genre_path: str = "data/ml-100k/u.genre") -> List[str]:
+    if pd is not None and os.path.exists(genre_path):
+        genres_df = pd.read_csv(genre_path, sep="|", names=["genre", "genre_id"], header=None)
+        return genres_df["genre"].dropna().tolist()
+    if os.path.exists(genre_path):
+        cols = []
+        with open(genre_path, "r", encoding="latin-1") as f:
+            for line in f:
+                parts = line.strip().split("|")
+                if parts and parts[0]:
+                    cols.append(parts[0])
+        if cols:
+            return cols
+    return list(DEFAULT_GENRES)
+
+
+if nn is not None:
+    class MovieRecModel(nn.Module):
+        def __init__(self, num_users, num_items, num_genres, emb_dim=32):
+            super(MovieRecModel, self).__init__()
+            self.user_emb = nn.Embedding(num_users, emb_dim)
+            self.item_emb = nn.Embedding(num_items, emb_dim)
+            self.genre_fc = nn.Linear(num_genres, emb_dim)
+            self.fc1 = nn.Linear(emb_dim * 3, 128)
+            self.bn1 = nn.BatchNorm1d(128)
+            self.dropout1 = nn.Dropout(0.3)
+            self.fc2 = nn.Linear(128, 64)
+            self.bn2 = nn.BatchNorm1d(64)
+            self.dropout2 = nn.Dropout(0.3)
+            self.fc3 = nn.Linear(64, 1)
+
+        def forward(self, user, item, genre):
+            user_vec = self.user_emb(user)
+            item_vec = self.item_emb(item)
+            genre_vec = self.genre_fc(genre)
+            x = torch.cat([user_vec, item_vec, genre_vec], dim=1)
+            x = torch.relu(self.fc1(x))
+            x = self.bn1(x)
+            x = self.dropout1(x)
+            x = torch.relu(self.fc2(x))
+            x = self.bn2(x)
+            x = self.dropout2(x)
+            x = self.fc3(x)
+            return x.squeeze()
+else:  # pragma: no cover
+    MovieRecModel = None
+
+
+_MODEL_CACHE: Optional[Tuple[Any, Dict[int, int], List[str]]] = None
+
+
+def load_model_and_metadata(
+    train_csv_path: str = "train.csv",
+    model_path: str = "model.pth",
+):
+    global _MODEL_CACHE
+    if _MODEL_CACHE is not None:
+        return _MODEL_CACHE
+    if torch is None or pd is None or not (os.path.exists(train_csv_path) and os.path.exists(model_path)):
+        return None, {}, get_genre_cols()
+
+    train_df = pd.read_csv(train_csv_path)
     genre_cols_local = train_df.columns[3:].tolist()
     num_users = train_df["user_idx"].nunique()
     num_items = train_df["item_idx"].nunique()
     num_genres = len(genre_cols_local)
-    
+
     model = MovieRecModel(num_users, num_items, num_genres, emb_dim=32)
-    model.load_state_dict(torch.load("model.pth"))
+    model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
-    return model, train_df, genre_cols_local
+    item_encoder = {int(item): idx for idx, item in enumerate(train_df["item_idx"].unique())}
+    _MODEL_CACHE = (model, item_encoder, genre_cols_local)
+    return _MODEL_CACHE
 
-model, train_df, genre_cols_local = load_model_and_metadata() # load the model once so it can be used multiple times 
 
-# This maps the movie_id  to a unique index used in the model
-item_encoder = {int(item): idx for idx, item in enumerate(train_df["item_idx"].unique())}
+def _load_catalog_items(genre_cols_local: List[str], item_path: str = "data/ml-100k/u.item") -> List[Dict[str, Any]]:
+    if not os.path.exists(item_path):
+        return []
+    items: List[Dict[str, Any]] = []
+    with open(item_path, "r", encoding="latin-1") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("|")
+            if len(parts) < 5:
+                continue
+            try:
+                movie_id = int(parts[0])
+            except ValueError:
+                continue
+            title = parts[1]
+            raw_genres = parts[5 : 5 + len(genre_cols_local)]
+            genre_vec = [float(x) if x.strip() in ("0", "1") else 0.0 for x in raw_genres]
+            if len(genre_vec) < len(genre_cols_local):
+                genre_vec.extend([0.0] * (len(genre_cols_local) - len(genre_vec)))
+            items.append({"movie_id": movie_id, "title": title, "genres": np.asarray(genre_vec, dtype=np.float32)})
+    return items
 
-def recommend_for_group(group_ratings):
+
+def recommend_for_group(
+    group_ratings: List[Dict[str, Any]],
+    candidate_movies: Optional[Iterable[Dict[str, Any]]] = None,
+    predictor: Optional[Callable[[int, int, np.ndarray], float]] = None,
+    top_k: int = 3,
+) -> List[Dict[str, Any]]:
     """
-    group_ratings: a list of dicts, each with keys:
-       - 'user_id'
-       - 'movie_id'
-       - 'rating'
-       - 'train_user_idx'  (assigned when the user joined the room)
-    Steps :
-      1. Load candidate movies from the u.item file.
-      2. Exclude movies already rated by the group.
-      3. For each group member, compute a bias adjustment from their residuals.
-         For each rated movie that exists in u.item, compute:
-              residual = actual rating - predicted rating.
-         Average these residuals to obtain a bias for that user.
-      4. For each candidate movie, compute predictions for each group member,
-         add the corresponding bias adjustment, and then average the adjusted scores.
-      5. Return the top candidates (top 3) based on these adjusted average scores.
+    Compute residual-bias-corrected group movie recommendations.
+    Deduplicates group members so users who submitted more ratings do not
+    disproportionately weight the group average.
     """
+    if not group_ratings or top_k <= 0:
+        return []
 
-    # Load candidate movies from u.item
-    items_df = pd.read_csv("data/ml-100k/u.item", sep="|", header=None, encoding="latin-1")
-    movie_columns = ['movie_id', 'title', 'release_date', 'video_release_date', 'IMDb_URL'] + genre_cols_local
-    items_df = items_df.iloc[:, :len(movie_columns)]
-    items_df.columns = movie_columns
+    model, item_encoder, genre_cols_local = load_model_and_metadata()
+    catalog = list(candidate_movies) if candidate_movies is not None else _load_catalog_items(genre_cols_local)
+    if not catalog:
+        return []
 
-    # Build a mapping from movie_id to its row for faster lookup
-    movie_rows = {int(row['movie_id']): row for _, row in items_df.iterrows()}
+    movie_rows: Dict[int, Dict[str, Any]] = {}
+    for item in catalog:
+        mid = int(item["movie_id"])
+        genres = np.asarray(item.get("genres", np.zeros(len(genre_cols_local))), dtype=np.float32)
+        movie_rows[mid] = {"movie_id": mid, "title": str(item["title"]), "genres": genres}
 
-    # Compute bias adjustments for each group member
-    # For each rating they submitted, compute residual = actual rating - predicted rating
-    user_residuals = defaultdict(list)
-    print("\n--- Computing Residuals ---", flush=True)
+    def _predict(train_user_idx: int, movie_id: int, genres: np.ndarray) -> float:
+        if predictor is not None:
+            return float(predictor(train_user_idx, movie_id, genres))
+        if model is not None and torch is not None and movie_id in item_encoder:
+            item_idx = item_encoder[movie_id]
+            with torch.no_grad():
+                g_t = torch.tensor([genres.tolist()], dtype=torch.float32)
+                u_t = torch.tensor([train_user_idx], dtype=torch.long)
+                i_t = torch.tensor([item_idx], dtype=torch.long)
+                return float(model(u_t, i_t, g_t).item())
+        # Deterministic content-based baseline when PyTorch weights are unavailable
+        active = float(np.sum(genres))
+        genre_bonus = float(np.dot(genres, np.linspace(0.1, 0.5, num=len(genres)))) / max(active, 1.0)
+        return 3.0 + genre_bonus
+
+    user_residuals: Dict[str, List[float]] = defaultdict(list)
+    unique_members: Dict[str, int] = {}
+
     for rating_entry in group_ratings:
-        user_id = rating_entry.get("user_id")
-        rated_movie_id = rating_entry.get("movie_id")
-        actual_rating = rating_entry.get("rating")
-        train_user_idx = rating_entry.get("train_user_idx", 0)
+        user_id = str(rating_entry.get("user_id"))
+        rated_movie_id = int(rating_entry.get("movie_id"))
+        actual_rating = float(rating_entry.get("rating"))
+        train_user_idx = int(rating_entry.get("train_user_idx", 0))
+        unique_members[user_id] = train_user_idx
 
         if rated_movie_id in movie_rows:
             row = movie_rows[rated_movie_id]
-            try:
-                item_id = int(row['movie_id'])
-            except Exception:
-                continue
-            item_idx = item_encoder.get(item_id)
-            if item_idx is None:
-                continue
+            predicted_rating = _predict(train_user_idx, rated_movie_id, row["genres"])
+            user_residuals[user_id].append(actual_rating - predicted_rating)
 
-            # Build genre tensor for the rated movie- inputs 
-            genre_values = row[genre_cols_local].values.astype(float)
-            genre_tensor = torch.tensor([genre_values], dtype=torch.float32)
-            user_tensor = torch.tensor([train_user_idx], dtype=torch.long)
-            item_tensor = torch.tensor([item_idx], dtype=torch.long)
+    user_bias: Dict[str, float] = {
+        uid: (sum(res) / len(res) if res else 0.0)
+        for uid, res in ((u, user_residuals.get(u, [])) for u in unique_members)
+    }
 
-            # predict and compute the residuals 
-            with torch.no_grad():
-                predicted_rating = model(user_tensor, item_tensor, genre_tensor).item()
-            residual = actual_rating - predicted_rating
-            user_residuals[user_id].append(residual)
-            print(f"User {user_id}, Rated Movie {rated_movie_id}: Actual {actual_rating}, Predicted {predicted_rating:.4f}, Residual {residual:.4f}", flush=True)
+    rated_movie_ids = {int(r["movie_id"]) for r in group_ratings}
+    predictions: List[Tuple[str, float]] = []
 
-    # Store the residuals 
-    print("\n--- User Residuals ---", flush=True)
-    for user_id, residual_list in user_residuals.items():
-        print(f"User {user_id} residuals: {residual_list}", flush=True)
-
-    # Average residuals to get a bias for each user
-    user_bias = {}
-    for rating_entry in group_ratings:
-        user_id = rating_entry.get("user_id")
-        residuals = user_residuals.get(user_id, [])
-        if residuals:
-            user_bias[user_id] = sum(residuals) / len(residuals)
-        else:
-            user_bias[user_id] = 0.0
-
-    print("\n--- User Biases ---", flush=True)
-    print(user_bias, flush=True)
-
-    # Exclude movies already rated by the group
-    rated_movie_ids = set(r["movie_id"] for r in group_ratings)
-    candidates = items_df[~items_df['movie_id'].isin(rated_movie_ids)].copy()
-
-    predictions = []
-    print("\n--- Computing Predictions for Candidates ---", flush=True)
-    # For each candidate, compute an adjusted prediction for every group member and average
-    for _, row in candidates.iterrows():
-        try:
-            item_id = int(row['movie_id'])
-        except Exception:
+    for mid, row in movie_rows.items():
+        if mid in rated_movie_ids:
             continue
-        item_idx = item_encoder.get(item_id)
-        if item_idx is None:
-            continue
-
-        # Build genre tensor for candidate movie.
-        genre_values = row[genre_cols_local].values.astype(float)
-        genre_tensor = torch.tensor([genre_values], dtype=torch.float32)
-
         candidate_scores = []
-        for r in group_ratings:
-            train_user_idx = r.get("train_user_idx", 0)
-            user_id = r.get("user_id")
-            user_tensor = torch.tensor([train_user_idx], dtype=torch.long)
-            item_tensor = torch.tensor([item_idx], dtype=torch.long)
-            with torch.no_grad():
-                base_score = model(user_tensor, item_tensor, genre_tensor).item()
-            # Add the user's bias adjustment.
-            bias = user_bias.get(user_id, 0.0)
-            adjusted_score = base_score + bias
+        for user_id, train_user_idx in unique_members.items():
+            base_score = _predict(train_user_idx, mid, row["genres"])
+            adjusted_score = base_score + user_bias.get(user_id, 0.0)
             candidate_scores.append(adjusted_score)
-        
-        # Log candidate details and per-user scores
-        print(f"Candidate '{row['title']}' (Movie ID {item_id}): Scores {candidate_scores}", flush=True)
-        
+
         if candidate_scores:
             avg_score = sum(candidate_scores) / len(candidate_scores)
-            predictions.append((row['title'], avg_score))
+            predictions.append((row["title"], avg_score))
 
-    # Sort candidates by average adjusted score and take the top 3
     predictions.sort(key=lambda x: x[1], reverse=True)
-    top_3 = predictions[:3]
-    print("\nTop 3 Predicted Movies (Adjusted):", flush=True)
-    for title, score in top_3:
-        print(f"  {title}: {score:.4f}", flush=True)
-
-    return [
-        {"title": title, "score": round(score, 2)}
-        for title, score in top_3
-    ]
+    return [{"title": title, "score": round(score, 2)} for title, score in predictions[:top_k]]
