@@ -223,3 +223,20 @@ def recommend_for_group(
 
     predictions.sort(key=lambda x: x[1], reverse=True)
     return [{"title": title, "score": round(score, 2)} for title, score in predictions[:top_k]]
+
+def compute_group_consensus_metrics(member_scores: List[float]) -> Dict[str, float]:
+    """Compute mean utility, egalitarian min utility, and disagreement variance for a group item."""
+    if not member_scores:
+        return {"mean_score": 0.0, "min_score": 0.0, "disagreement_std": 0.0, "consensus_index": 0.0}
+    vals = [float(x) for x in member_scores]
+    mean_v = sum(vals) / len(vals)
+    min_v = min(vals)
+    var_v = sum((x - mean_v) ** 2 for x in vals) / len(vals)
+    std_v = var_v ** 0.5
+    consensus = max(0.0, mean_v - 0.5 * std_v)
+    return {
+        "mean_score": round(mean_v, 6),
+        "min_score": round(min_v, 6),
+        "disagreement_std": round(std_v, 6),
+        "consensus_index": round(consensus, 6),
+    }
