@@ -103,3 +103,12 @@ def test_pareto_fair_least_misery_aggregation():
     pareto_fair = recommend_for_group(ratings, candidate_movies=catalog, predictor=predictor, fairness_lambda=0.5)
     assert pareto_fair[0]["title"] == "Consensus Crowdpleaser"
 
+from backend.model_service import compute_group_consensus_metrics
+
+
+def test_compute_group_consensus_metrics():
+    unanimous = compute_group_consensus_metrics([4.5, 4.5, 4.5])
+    polarized = compute_group_consensus_metrics([5.0, 1.0, 5.0])
+    assert unanimous["disagreement_std"] == 0.0
+    assert unanimous["consensus_index"] > polarized["consensus_index"]
+    assert polarized["min_score"] == 1.0
